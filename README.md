@@ -1,3 +1,42 @@
+# 📢 Changelog & Installation (Current Version)
+
+## 🆕 Changes in this Version
+- Added **macOS (darwin)** support alongside Linux.
+- New **automatic configuration** for tool paths (`jadx`, `d2j-dex2jar`, `grep`):
+  - On first run, creates a config file in `~/.APKHunt` or `~/.config/APKHunt`.
+  - Automatically discovers tool locations or lets you edit paths manually.
+  - Prepends these paths to `PATH` so no manual export is needed.
+- Unified the code into a single `apkhunt.go` file for easier local execution.
+- Maintains compatibility with Linux usage.
+
+## 💻 Installation
+
+### Option 1 – Install from GitHub
+```bash
+go install github.com/jadkorr/APKHunt@latest
+```
+This will compile and install `apkhunt` into `$(go env GOPATH)/bin` (usually `~/go/bin`).
+
+### Option 2 – Local Installation
+```bash
+git clone https://github.com/jadkorr/APKHunt.git
+cd APKHunt
+go install
+```
+
+Make sure `~/go/bin` is in your `PATH`:
+```bash
+echo 'export PATH=$PATH:$(go env GOPATH)/bin' >> ~/.zshrc
+source ~/.zshrc
+```
+
+You can now run:
+```bash
+apkhunt [options]
+```
+
+---
+
 <p align="center">
 <img src="https://user-images.githubusercontent.com/122369607/213175318-413b0d16-2e50-4f0e-a422-08c0adcb3b93.png" alt="APKHunt"/>
 </p>
