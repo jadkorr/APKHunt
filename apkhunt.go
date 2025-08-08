@@ -1,7 +1,9 @@
 package main
 
 import (
-        "fmt"
+                        "errors"
+"bufio"
+"fmt"
         "io"
         "io/ioutil"
         "log"
@@ -49,8 +51,11 @@ import (
 
         func APKHunt_basic_req_checks() {
         
-        // OS type check
-        if runtime.GOOS != "linux" {
+        
+        // Load/create tool paths config and prepend to PATH
+        ensureEnvAndLoad()
+// OS type check
+        if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
                 APKHunt_Intro_Func()
                 fmt.Println("\n[+] Checking if APKHunt is being executed on Linux OS or not...") 
                 fmt.Println("[!] Linux OS has not been identified! \n[!] Exiting...")
@@ -3183,3 +3188,199 @@ func main() {
         log.Println("\n[*] Thank you for using APKHunt! Made with <3 in India.\n")
         fmt.Printf(string(colorReset))        
 }
+
+
+// ======== Autoconfiguration for tool paths (jadx, d2j-dex2jar, grep) ========
+// Creates/validates ~/.APKHunt or ~/.config/APKHunt on first run, autodiscovers
+// tools, and prepends their directories to PATH so existing exec.Command calls work.
+
+func ensureEnvAndLoad() {
+    cfgPath, _ := ensureEnvConfig()
+    if cfgPath == "" {
+        return
+    }
+    env := parseDotEnvFileSilent(cfgPath)
+
+    // Attempt repair for missing/invalid entries
+    changed := false
+    for _, key := range []string{"JADX_PATH", "DEX2JAR_PATH", "GREP_PATH"} {
+        bin := strings.TrimSpace(env[key])
+        if bin == "" || !isExecutable(bin) {
+            found := autoDiscover(key)
+            if found != "" {
+                env[key] = found
+                changed = true
+            }
+        }
+    }
+    if changed {
+        _ = writeEnv(cfgPath, env)
+    }
+
+    // Prepend dirs to PATH
+    var prependDirs []string
+    for _, key := range []string{"JADX_PATH", "DEX2JAR_PATH", "GREP_PATH"} {
+        if bin := strings.TrimSpace(env[key]); bin != "" && isExecutable(bin) {
+            prependDirs = append(prependDirs, filepath.Dir(bin))
+        }
+    }
+    if len(prependDirs) > 0 {
+        oldPath := os.Getenv("PATH")
+        sep := string(os.PathListSeparator)
+        newPath := strings.Join(prependDirs, sep)
+        if oldPath != "" {
+            newPath = newPath + sep + oldPath
+        }
+        _ = os.Setenv("PATH", newPath)
+    }
+}
+
+func ensureEnvConfig() (string, bool) {
+    home, err := os.UserHomeDir()
+    if err != nil || home == "" {
+        return "", false
+    }
+    dot := filepath.Join(home, ".APKHunt")
+    xdg := filepath.Join(home, ".config", "APKHunt")
+
+    if fileExists(dot) {
+        validateOrInit(dot)
+        return dot, true
+    }
+    if fileExists(xdg) {
+        validateOrInit(xdg)
+        return xdg, true
+    }
+
+    env := map[string]string{
+        "JADX_PATH":    autoDiscover("JADX_PATH"),
+        "DEX2JAR_PATH": autoDiscover("DEX2JAR_PATH"),
+        "GREP_PATH":    autoDiscover("GREP_PATH"),
+    }
+    _ = os.MkdirAll(filepath.Dir(dot), 0o755)
+    if err := writeEnv(dot, env); err == nil {
+        return dot, false
+    }
+    _ = os.MkdirAll(filepath.Dir(xdg), 0o755)
+    if err := writeEnv(xdg, env); err == nil {
+        return xdg, false
+    }
+    return "", false
+}
+
+func validateOrInit(path string) {
+    info, err := os.Stat(path)
+    if err == nil && info.Size() > 0 {
+        return
+    }
+    env := map[string]string{
+        "JADX_PATH":    autoDiscover("JADX_PATH"),
+        "DEX2JAR_PATH": autoDiscover("DEX2JAR_PATH"),
+        "GREP_PATH":    autoDiscover("GREP_PATH"),
+    }
+    _ = writeEnv(path, env)
+}
+
+func autoDiscover(key string) string {
+    var name string
+    switch key {
+    case "JADX_PATH":
+        name = "jadx"
+    case "DEX2JAR_PATH":
+        name = "d2j-dex2jar"
+    case "GREP_PATH":
+        name = "grep"
+    default:
+        return ""
+    }
+
+    if p, err := exec.LookPath(name); err == nil && isExecutable(p) {
+        if a, err2 := filepath.Abs(p); err2 == nil {
+            return a
+        }
+        return p
+    }
+
+    var dirs []string
+    if runtime.GOOS == "darwin" {
+        dirs = []string{"/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"}
+    } else {
+        dirs = []string{"/usr/local/bin", "/usr/bin", "/bin", "/snap/bin"}
+    }
+    for _, d := range dirs {
+        p := filepath.Join(d, name)
+        if isExecutable(p) {
+            return p
+        }
+    }
+    return ""
+}
+
+func writeEnv(path string, env map[string]string) error {
+    var b strings.Builder
+    b.WriteString("# APKHunt tool paths. Edit if you want to override.\n")
+    b.WriteString("# Valid keys: JADX_PATH, DEX2JAR_PATH, GREP_PATH\n\n")
+    for _, k := range []string{"JADX_PATH", "DEX2JAR_PATH", "GREP_PATH"} {
+        v := strings.TrimSpace(env[k])
+        if v == "" {
+            b.WriteString(fmt.Sprintf("# %s=\n", k))
+        } else {
+            if strings.ContainsAny(v, " \t") {
+                v = fmt.Sprintf("%q", v)
+            }
+            b.WriteString(fmt.Sprintf("%s=%s\n", k, v))
+        }
+    }
+    tmp := path + ".tmp"
+    if err := os.WriteFile(tmp, []byte(b.String()), 0o600); err != nil {
+        return err
+    }
+    return os.Rename(tmp, path)
+}
+
+func parseDotEnvFileSilent(path string) map[string]string {
+    env, _ := parseDotEnvFile(path)
+    return env
+}
+
+func parseDotEnvFile(path string) (map[string]string, error) {
+    f, err := os.Open(path)
+    if err != nil {
+        return nil, err
+    }
+    defer f.Close()
+
+    env := make(map[string]string)
+    sc := bufio.NewScanner(f)
+    lineno := 0
+    for sc.Scan() {
+        lineno++
+        line := strings.TrimSpace(sc.Text())
+        if line == "" || strings.HasPrefix(line, "#") {
+            continue
+        }
+        parts := strings.SplitN(line, "=", 2)
+        if len(parts) != 2 {
+            return nil, errors.New(fmt.Sprintf("invalid line %d", lineno))
+        }
+        k := strings.TrimSpace(parts[0])
+        v := strings.TrimSpace(parts[1])
+        v = strings.Trim(v, `"'`)
+        env[k] = v
+    }
+    return env, sc.Err()
+}
+
+func isExecutable(p string) bool {
+    st, err := os.Stat(p)
+    if err != nil {
+        return false
+    }
+    return !st.IsDir() && (st.Mode()&0o111) != 0
+}
+
+func fileExists(p string) bool {
+    _, err := os.Stat(p)
+    return err == nil
+}
+
